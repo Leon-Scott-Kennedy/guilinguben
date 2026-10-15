@@ -1,0 +1,169 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: guilinguben-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: guilinguben
+      POSTGRES_USER: guilinguben
+      POSTGRES_PASSWORD: 123
+      TZ: Asia/Shanghai
+    # 固定数据库会话时区为北京时间，避免 psql 查询显示比本地时间晚 8 小时
+    command: ["postgres", "-c", "timezone=Asia/Shanghai"]
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # 健康检查（E 轮 16.42）：start-all.sh 与容器化编排依赖其判断数据库就绪
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guilinguben -d guilinguben"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: guilinguben-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # 健康检查（E 轮 16.42）：与 postgres 同用途
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    # 阶段五待办（消息中间件与长任务）未接线：E 轮 16.42 加 profiles 默认不拉起，
+    # 需要时 docker compose --profile mq up -d rabbitmq
+    image: rabbitmq:3.13-management
+    container_name: guilinguben-rabbitmq
+    restart: unless-stopped
+    profiles: ["mq"]
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  etcd:
+    # milvus 栈（etcd/minio/minio-setup/milvus）：E 轮 16.42 加 profiles 默认不拉起（日常后端为 chroma），
+    # 需要时 docker compose --profile milvus up -d etcd minio && sleep 12 &&
+    # docker compose --profile milvus up -d minio-setup && sleep 6 && docker compose --profile milvus up -d milvus
+    image: quay.io/coreos/etcd:v3.5.11
+    container_name: guilinguben-etcd
+    restart: unless-stopped
+    profiles: ["milvus"]
+    command: >
+      /usr/local/bin/etcd
+      -name etcd0
+      -advertise-client-urls http://etcd:2379
+      -listen-client-urls http://0.0.0.0:2379
+      -listen-peer-urls http://0.0.0.0:2380
+      -initial-advertise-peer-urls http://etcd:2380
+      -initial-cluster etcd0=http://etcd:2380
+      -initial-cluster-state new
+    ports:
+      - "2379:2379"
+
+  minio:
+    # quay.io 官方同步源（docker.io/minio/minio 已被上游限制，任何加速器代理均 403；quay 直连已验证可达）
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: guilinguben-minio
+    restart: unless-stopped
+    profiles: ["milvus"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  # Milvus 依赖 minio 中的 a-bucket 存储段文件，启动时用 mc 一次性创建（Milvus 不会自动建桶）
+  minio-setup:
+    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+    container_name: guilinguben-minio-setup
+    restart: "no"
+    profiles: ["milvus"]
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "until /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin; do sleep 2; done;
+      /usr/bin/mc mb -p myminio/a-bucket;
+      /usr/bin/mc anonymous set download myminio/a-bucket;"
+
+  milvus:
+    image: milvusdb/milvus:v2.4.10
+    container_name: guilinguben-milvus
+    restart: unless-stopped
+    profiles: ["milvus"]
+    # milvus run 需要位置参数 standalone（无它则报 Unknown server type；原始 compose 缺此参数）
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    depends_on:
+      - etcd
+      - minio
+      - minio-setup
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - milvus_data:/var/lib/milvus
+
+volumes:
+  postgres_data:
+  minio_data:
+  milvus_data:
+
+# ===== 应用三端容器化（E 轮 16.42 方案丙可选资产：默认注释不启用，本地开发用 scripts/start-all.sh）=====
+# 启用方式：取消下方注释后 docker compose up -d java-backend ai-service frontend；
+# 构建与运行细节（路径/环境变量覆盖/host.docker.internal）详见各 Dockerfile 头注释与 docs/DEPLOY.md。
+#
+#   java-backend:
+#     build:
+#       context: ./services/java-backend
+#       dockerfile: Dockerfile
+#     container_name: guilinguben-java
+#     ports:
+#       - "8080:8080"
+#     environment:
+#       # 容器内 localhost 指向容器自身，数据库/Redis/AI 服务需指向宿主机（Spring 环境变量覆盖 application.yml）
+#       SPRING_DATASOURCE_URL: jdbc:postgresql://host.docker.internal:5432/guilinguben
+#       SPRING_DATA_REDIS_HOST: host.docker.internal
+#       AI_SERVICE_BASEURL: http://host.docker.internal:8001
+#     extra_hosts:
+#       - "host.docker.internal:host-gateway"
+#     depends_on:
+#       postgres:
+#         condition: service_healthy
+#
+#   ai-service:
+#     build:
+#       context: .
+#       dockerfile: services/ai-service/Dockerfile
+#     container_name: guilinguben-ai
+#     ports:
+#       - "8001:8001"
+#     volumes:
+#       # BASE_DIR（config.py parents[3]）在容器内为 /，模型/数据/PDF 挂载到根同名路径
+#       - ./models:/models
+#       - ./data:/data
+#       - ./guilinguben.pdf:/guilinguben.pdf
+#     environment:
+#       LLM_BASE_URL: http://host.docker.internal:11434
+#       CHROMA_PERSIST_DIR: /data/chroma_index
+#     extra_hosts:
+#       - "host.docker.internal:host-gateway"
+#
+#   frontend:
+#     build:
+#       context: ./services/frontend
+#       dockerfile: Dockerfile
+#     container_name: guilinguben-frontend
+#     ports:
+#       - "3000:3000"

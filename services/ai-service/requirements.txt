@@ -1,0 +1,16 @@
+fastapi==0.141.1
+uvicorn[standard]==0.51.0
+pydantic==2.13.4
+pydantic-settings==2.15.0
+langgraph==1.2.11
+langgraph-checkpoint-sqlite==3.1.1
+langchain-community==0.4.2
+langchain-core==1.5.4
+faiss-cpu==1.15.0
+sentence-transformers==5.6.0
+pypdf==6.16.0
+requests==2.34.2
+python-dotenv==1.2.2
+zhconv==1.4.3
+pymilvus==2.4.10
+chromadb==1.5.9

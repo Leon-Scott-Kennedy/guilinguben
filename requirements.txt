@@ -1,0 +1,617 @@
+streamlit
+sentence-transformers
+torch
+zhconv
+requests
+
+Python基础 异步编程 高并发 python框架
+java基础 java框架
+rag 向量数据库（chroma Milvus ElasticSearch）
+MCP client
+CI/CD
+
+FastAPI
+LangGraph Langchain
+Qwen
+Copilot
+prompt engineering
+Function Calling / Tool Calling 
+ReAct
+中间件 MySQL Redis RabbitMQ
+AI Agent框架
+
+
+agent自我纠正是怎么做到的
+
+
+========================java和python对比============================
+
+1=======python对列表、字符串等序列支持切片 |  java没有对应语法 相似的只有subList方法，但行为不等价
+
+
+2=======赋值、浅赋值和深赋值
+    普通赋值：不复制对象 second = first
+    浅赋值：复制对象的引用 second = copy.copy(first)
+    深赋值：复制对象及其引用 second = copy.deepcopy(first)
+
+3=======条件判断
+    python：if expression:
+                # do something
+            elif expression:
+                # do something
+            else:
+                # do something
+    java：  if (expression) {
+                // do something
+            } else if (expression) {
+                // do something
+            } else {
+                // do something
+            }
+
+4=======逻辑符号
+    python：and、or、not
+    java：&&、||、!
+
+
+5=======真假判断
+    python：不只把 True 和 False 当作真假
+        还有None
+            0
+            0.0
+            ""
+            []
+            {}
+            set()
+    java：True、False
+
+6=======循环控制
+    python：for item in iterable:
+                # do something
+            while expression:
+                # do something
+    java：for (type item : iterable) {
+                // 这是增强for循环
+            }
+            while (expression) {
+                // do something
+            }
+
+    遍历字典时
+        python：for key, value in dict.items():
+                    # do something
+        java：for (Map.Entry<KeyType, ValueType> entry : map.entrySet()) {
+                    KeyType key = entry.getKey();
+                    ValueType value = entry.getValue();
+                    // do something
+                }
+
+    同时获取索引时
+        python：for index, item in enumerate(iterable):
+                    # do something
+        java：
+            for (int index = 0; index < names.size(); index++) {
+                    System.out.println(index + " " + names.get(index));
+            }
+            //如果使用增强for循环，则需要手动维护索引
+            int index = 0;
+            for (type item : iterable) {
+                // do something
+                index++;
+            }
+
+7=======自增符号
+    python没有++、--等自增符号
+    需要写成+= 1 或 -= 1
+
+8=======循环else的用法
+    python：for/while循环可以有else语句块，当循环正常结束时执行else语句块，如果循环被break中断，则不执行else语句块
+    比如：  for item in iterable:
+                if condition:
+                    break
+            else:
+                # do something if loop completes without break
+    java：没有类似的语法结构
+
+9=======关于返回值
+    python：函数可以返回多个值，返回值是一个元组
+        def func():
+            return value1, value2
+        result1, result2 = func()
+    python如果没有写return，实际的返回值是None
+
+    java：函数只能返回一个值，如果需要返回多个值，可以使用自定义类或数组/集合来封装多个值
+        public class Result {
+            private Type1 value1;
+            private Type2 value2;
+            // getters and setters
+        }
+        public Result func() {
+            return new Result(value1, value2);
+        }
+
+9=======*args和**kwargs
+    *args：接收多个位置参数，对应java中的可变参数，比如
+        def func(*args):
+            for arg in args:
+                print(arg)
+        func(1, 2, 3)  # 输出：1 2 3
+
+**kwargs：接收多个关键字参数，比如
+    def func(**kwargs):
+        for key, value in kwargs.items():
+            print(f"{key}: {value}")
+    func(a=1, b=2, c=3)  # 输出：a: 1 b: 2 c: 3
+
+10=======同样像c语言传递指针一样，但是操作名称是“解包”
+    def add(left, right):
+        return left + right
+
+    numbers = [1, 2]
+    result = add(*numbers) # *numbers 表示把列表解包为位置参数。
+
+    config = {
+        "model": "qwen",
+        "temperature": 0.7,
+    }
+
+    create_model(**config)  # **config 表示把字典解包为关键字参数。
+    # 相当于create_model(model="qwen", temperature=0.7)
+
+
+10=======python可以像c语言一样传递函数指针，注意：不是直接调用该函数，比如
+    def add(left, right):
+        return left + right
+
+    def subtract(left, right):
+        return left - right
+
+    def operate(func, left, right):
+        return func(left, right)
+
+    result1 = operate(add, 5, 3)       # 调用add函数
+    result2 = operate(subtract, 5, 3)  # 调用subtract函数
+
+java中也有类似的，但是叫做“方法引用”，比如
+    public class MathOperations {
+        public static int add(int left, int right) {
+            return left + right;
+        }
+
+        public static int subtract(int left, int right) {
+            return left - right;
+        }
+    }
+
+    public class Main {
+        public static void main(String[] args) {
+            BiFunction<Integer, Integer, Integer> addFunction = MathOperations::add;
+            BiFunction<Integer, Integer, Integer> subtractFunction = MathOperations::subtract;
+
+            int result1 = operate(addFunction, 5, 3);       // 调用add函数
+            int result2 = operate(subtractFunction, 5, 3);  // 调用subtract函数
+        }
+
+        public static int operate(BiFunction<Integer, Integer, Integer> func, int left, int right) {
+            return func.apply(left, right);
+        }
+    }
+
+11=======异常处理
+    python：try:
+                # code that may raise an exception
+            except ExceptionType as e:
+                # handle the exception
+            else:
+                # code that runs if no exception occurs
+            finally:
+                # code that runs regardless of whether an exception occurred or not
+    java：try {
+                // code that may throw an exception
+            } catch (ExceptionType e) {
+                // handle the exception
+            } finally {
+                // code that runs regardless of whether an exception occurred or not
+            }
+
+12=======自定义异常
+    python：class CustomError(Exception):
+                pass
+
+            主动抛出异常：raise CustomError("An error occurred")
+    java：public class CustomException extends Exception {
+                public CustomException(String message) {
+                    super(message);
+                }
+            }
+            主动抛出异常：throw new CustomException("An error occurred");
+
+
+13=======循环导入问题
+    python：循环导入是指两个或多个模块相互导入对方，导致导入顺序问题。可以通过重构代码、使用局部导入或将公共部分提取到单独的模块来解决。
+    java：循环导入通常不会导致编译错误，但可能会导致运行时错误。可以通过重构代码、使用接口或抽象类来解决。
+
+14=======文件读写
+    python：with open('file.txt', 'r', encoding="utf-8") as file:
+                content = file.read()
+            with open('file.txt', 'w', encoding="utf-8") as file:
+                file.write("Hello, World!")
+            还可以追加写入
+            with open('file.txt', 'a', encoding="utf-8") as file:
+                file.write("Additional content")
+    java：try (BufferedReader reader = new BufferedReader(new FileReader("file.txt"))) {
+                String content = reader.lines().collect(Collectors.joining("\n"));
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter("file.txt"))) {
+                writer.write("Hello, World!");
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            还可以追加写入
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter("file.txt", true))) {
+                writer.write("Additional content");
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+15=======上下文管理器：with语句在Python中用于简化资源管理，确保在使用完资源后自动释放。
+            Java中没有直接对应的语法，但可以使用try-with-resources语句来实现类似的功能。比如
+            try (the resource) {
+                // do something with the resource
+            } 
+
+自定义上下文管理器，比如
+            class CustomContext:
+                def __enter__(self):
+                    # setup code
+                    return self
+
+                def __exit__(self, exc_type, exc_value, traceback):
+                    # cleanup code
+                    pass
+
+            with CustomContext() as context:
+                # do something with the context
+
+            java中可以通过实现AutoCloseable接口来创建自定义上下文管理器，比如
+            public class CustomContext implements AutoCloseable {
+                public CustomContext() {
+                    // setup code
+                }
+
+                @Override
+                public void close() {
+                    // cleanup code
+                }
+            }
+
+            try (CustomContext context = new CustomContext()) {
+                // do something with the context
+            }
+
+16=======文件路径，怎么拼接更安全和可读
+    python：使用os.path.join()或pathlib模块来拼接路径，确保跨平台兼容性。
+        import os
+        file_path = os.path.join("folder", "subfolder", "file.txt")
+
+        from pathlib import Path
+        file_path = Path("folder") / "subfolder" / "file.txt"
+    java：使用java.nio.file.Paths类来拼接路径，确保跨平台兼容性。
+        import java.nio.file.Paths;
+        Path filePath = Paths.get("folder", "subfolder", "file.txt");
+
+
+17=======日志模块
+    python：使用logging模块来记录日志，支持不同的日志级别和输出方式。
+        import logging
+
+        logging.basicConfig(level=logging.INFO)
+        logging.info("This is an info message")
+        logging.error("This is an error message")
+
+    java：使用java.util.logging包或第三方库（如Log4j、SLF4J）来记录日志。
+        import java.util.logging.Logger;
+
+        Logger logger = Logger.getLogger(Main.class.getName());
+        logger.info("This is an info message");
+        logger.severe("This is an error message");     
+
+18=======python的self
+    相当于java的this，都是指向当前对象的引用，区别在于self是显式传递的，而this是隐式传递的。
+
+19=======@property：让 Python 更像 Java getter
+    class User:
+        def __init__(self, name):
+            self._name = name
+
+        @property
+        def name(self):
+            return self._name
+
+    user = User("李文琪")
+    print(user.name)
+
+20=======__str__ 和 Java toString()
+    class User:
+        def __init__(self, name, age):
+            self.name = name
+            self.age = age
+
+        def __str__(self):
+            return f"User{{name='{self.name}', age={self.age}}}"
+
+    调用__str__ 方法时，Python 会返回一个字符串表示对象的内容，类似于 Java 中的 toString() 方法。比如
+    user = User("李文琪", 30)
+    print(user)
+
+21=======类变量 vs 实例变量
+    class Counter:
+        count = 0
+
+        def __init__(self):
+            Counter.count += 1
+    在python中，类变量是属于类的属性，而实例变量是属于对象的属性。类变量在所有实例之间共享，而实例变量是每个实例独有的。
+    对应于java的静态变量，比如
+    public class Counter {
+        private static int count = 0;
+
+        public Counter() {
+            count++;
+        }
+
+        public static int getCount() {
+            return count;
+        }
+    }
+
+    python中的实例变量，时不需要像java的成员变量一样，写在类的开头，而是可以在构造函数中动态创建。比如
+    class User:
+        def __init__(self, name, age):
+            self.name = name  # 实例变量
+            self.age = age    # 实例变量
+
+22=======继承
+    python：class SubClass(SuperClass):
+                def __init__(self, ...):
+                    super().__init__(...)
+                    # 子类的初始化代码
+    java：public class SubClass extends SuperClass {
+                public SubClass(...) {
+                    super(...);
+                    // 子类的初始化代码
+                }
+            }
+
+23=======抽象类与接口
+    python：使用abc模块来定义抽象类和抽象方法。抽象类不能被实例化，必须由子类实现所有的抽象方法才能实例化。
+        from abc import ABC, abstractmethod
+
+        class AbstractClass(ABC):
+            @abstractmethod
+            def speak(self):
+                pass
+
+        class Dog(Animal):
+            def speak(self):
+                print("汪汪")
+    java：使用abstract关键字来定义抽象类和抽象方法。抽象类不能被实例化，必须由子类实现所有的抽象方法才能实例化。
+        public abstract class AbstractClass {
+            public abstract void speak();
+        }
+        还有interface关键字来定义接口，接口中的方法默认是抽象的，必须由实现类实现所有的方法才能实例化。
+        public interface Animal {
+            void speak();
+        }
+24=======Python 协议（Protocol）
+    更像是java定义好了的interface，python的类只要实现了协议中定义的方法，就可以被认为是实现了该协议，而不需要显式地继承该协议。
+    比如：
+    from typing import Protocol
+    class Animal(Protocol):
+        def speak(self) -> str:
+            ...
+
+25=======dataclass：Python 版更简洁的类
+    from dataclasses import dataclass
+
+    @dataclass
+    class User:
+        name: str
+        age: int
+    看起来就像是java的pojo
+    class User {
+        private String name;
+        private int age;
+
+        public User(String name, int age) { ... }
+        public String getName() { ... }
+        public int getAge() { ... }
+    }
+
+26=======Python 的对象模型与 Java 不完全相同
+    Python 中的对象模型是动态的，类和对象都是在运行时创建的。Python 中的类是对象，可以在运行时修改类的属性和方法。而 Java 中的类是静态的，在编译时就确定了类的结构，不能在运行时修改类的属性和方法。
+    比如：
+    class Dog:
+        pass
+
+    dog = Dog()
+    dog.name = "小白"（这个对象在运行期还可以动态加属性。）
+    Python 中的继承是多继承的，一个类可以继承多个父类。而 Java 中的继承是单继承的，一个类只能继承一个父类，但可以实现多个接口。
+
+    （不理解）Python 中的方法解析顺序（MRO）是基于 C3 线性化算法，而 Java 中的方法解析顺序是基于单继承树。
+
+27=======依赖管理
+    python：使用pip和requirements.txt来管理依赖，或者使用poetry、pipenv等工具来管理项目的依赖和虚拟环境。
+    java：使用Maven或Gradle来管理依赖，通过pom.xml或build.gradle文件来定义项目的依赖和构建配置。
+
+    更严谨的 Python 方式：
+
+    requirements.txt
+    poetry
+    pip-tools
+    PDM
+    uv
+    尤其当项目复杂时，像 Java 一样“依赖版本管理”也会变重要。
+
+28=======安装和查看当前环境已安装
+    python：pip install package_name
+            pip list                        类似于maven的mvn dependency:tree
+            pip freeze (> requirements.txt) 类似于maven的mvn dependency:tree
+            pip show package_name
+    java：使用Maven或Gradle来管理依赖，查看当前环境已安装的依赖可以通过IDE（如IntelliJ IDEA）或命令行工具（如mvn dependency:tree）来查看。
+
+29=======小结
+    Python 代码组织：模块和包
+    Python 依赖环境：venv + pip
+    Python 项目运行：脚本入口 / 模块调用
+
+30=======Python 的虚拟环境
+    Python 的虚拟环境是一个独立的 Python 运行环境，可以在其中安装和管理项目的依赖，而不会影响全局的 Python 环境。常用的虚拟环境工具有 venv、virtualenv 和 conda。
+    创建虚拟环境：
+        python -m venv myenv
+    激活虚拟环境：
+        Windows: myenv\Scripts\activate
+        macOS/Linux: source myenv/bin/activate
+    安装依赖：
+        pip install package_name
+    退出虚拟环境：
+        deactivate
+
+    venv 控制“当前python解释器里有哪些包可用”
+
+31=======Java 的 classpath / Python 的 sys.path
+    Java 的 classpath 是一个环境变量，用于指定 Java 虚拟机（JVM）在运行时查找类文件的位置。可以通过命令行参数 -cp 或 -classpath 来设置 classpath，也可以在 IDE 中配置。
+    Python 的 sys.path 是一个列表，包含了 Python 解释器在运行时查找模块的路径。可以通过 sys.path.append() 方法动态添加路径，也可以通过环境变量 PYTHONPATH 来设置。
+
+32=======Python 虽然更“灵活”，但灵活不是“没有规则”；它只是：
+
+··语法更轻
+··运行更动态
+··import 和环境更重要
+··依赖管理更需要规范
+··工程协作更需要清晰分层
+
+Java 则更“规范”，更强调：
+
+··类型
+··编译期检查
+··包结构
+··程序结构
+··泛型和接口设计
+
+33=======python的异步编程
+    Python 的异步编程主要通过 asyncio 库实现，使用 async/await 语法来定义和调用异步函数。异步编程允许在等待 I/O 操作完成时执行其他任务，从而提高程序的并发性能。
+    单线程事件循环驱动的异步模型
+    示例：
+    ```python
+    import asyncio
+
+    async def fetch_data():
+        print("Fetching data...")
+        await asyncio.sleep(2)  # 模拟 I/O 操作
+        print("Data fetched!")
+        return {"data": "sample"}
+
+    async def main():
+        result = await fetch_data()
+        print(result)
+
+    asyncio.run(main())
+    ```
+
+    Java 的异步编程主要通过 CompletableFuture 和 ExecutorService 实现，使用回调函数或 Future 对象来处理异步任务。
+
+    示例：
+    ```java
+    import java.util.concurrent.CompletableFuture;
+
+    public class AsyncExample {
+        public static void main(String[] args) {
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                System.out.println("Fetching data...");
+                try {
+                    Thread.sleep(2000); // 模拟 I/O 操作
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                System.out.println("Data fetched!");
+            });
+
+            future.join(); // 等待异步任务完成
+        }
+    }
+    ```
+
+34=======sleep
+    python  await asyncio.sleep(1) 
+    java  Thread.sleep(1000)
+    区别是python的sleep是异步的，不会阻塞事件循环，而java的sleep是同步的，会阻塞当前线程。
+
+35=======Python 的高并发
+    Python 的高并发主要通过多线程、多进程和异步编程实现。由于 GIL（全局解释器锁）的存在，多线程在 CPU 密集型任务中可能无法充分利用多核 CPU，但在 I/O 密集型任务中仍然有效。多进程可以绕过 GIL，充分利用多核 CPU，但开销较大。异步编程适用于 I/O 密集型任务，可以在单线程中处理大量并发请求。
+    from concurrent.futures import ThreadPoolExecutor
+    Java 的高并发主要通过多线程和线程池实现，Java 提供了丰富的并发工具类，如 ExecutorService、ConcurrentHashMap 等，可以方便地实现高并发应用。
+    而java是JUC（Java Util Concurrent）包，python是concurrent.futures包。
+
+36=======Python 的高并发框架
+    Python 的高并发框架主要有：
+    - FastAPI：基于 Starlette 和 Pydantic 的现代 Web 框架，支持异步编程和自动生成 OpenAPI 文档。
+    - Sanic：一个异步的 Python Web 框架，专注于高性能和低延迟。
+    - Tornado：一个支持异步网络编程的 Web 框架和异步网络库。
+    - Aiohttp：一个基于 asyncio 的异步 HTTP 客户端和服务器框架。
+
+    Java 的高并发框架主要有：
+    - Spring Boot：一个基于 Spring 框架的快速开发框架，支持多线程和异步处理。
+    - Netty：一个高性能的异步事件驱动网络应用框架，用于构建高并发的网络服务器和客户端。
+    - Vert.x：一个轻量级的、事件驱动的应用框架，支持多语言开发和高并发处理。
+
+37=======Python 的异步编程和高并发的应用场景
+    - Web 开发：使用 FastAPI、Sanic 等框架构建高性能的 Web 应用。
+    - 网络爬虫：使用 aiohttp、Scrapy 等库实现异步爬取大量网页。
+    - 实时数据处理：使用 asyncio、WebSocket 等技术处理实时数据流。
+    - 微服务架构：使用 FastAPI、gRPC 等技术构建高并发的微服务系统。
+
+    Java 的异步编程和高并发的应用场景
+    - Web 开发：使用 Spring Boot、Netty 等框架构建高性能的 Web 应用。
+    - 分布式系统：使用 Akka、Vert.x 等框架实现分布式系统和微服务架构。
+    - 大数据处理：使用 Apache Kafka、Apache Flink 等技术处理大规模数据流。
+    - 金融交易系统：使用多线程和异步处理技术实现高频交易和实时风控系统。
+
+38=======为什么 AI/Agent 很容易涉及异步？
+因为 AI 任务特别耗时：
+
+生成文本
+检索数据库
+调用多个工具
+多轮对话
+文档处理
+批量嵌入生成
+如果不能异步，就会导致：
+
+线程阻塞
+请求排队
+延迟过大
+用户体验差
+
+39=======生成器和列表的区别
+    numbers = [i for i in range(5)] 会一次性生成整个列表。
+    numbers = (i for i in range(5)) 会按需生成。    这叫“惰性计算”。
+    为什么生成器重要？因为很多场景里数据量非常大，不适合一次性放进内存。
+
+40=======python反射
+
+41=======python注解
+
+42=======python装饰器
+
+43=======编译期 运行时
+
+
+
+你说的对，现在还不能马上大面积改代码，我们需要先达成一些共识。
+我有一个产品构想，一定要涉及到你归纳的硬指标，每个环节的细节可以逐步打磨，让产品变成生产级别的，技术选型方面，每个小环节选择一个高频出现的技术，我先来说一下自己的产品构想：
+首先用户需要在设备（pc/安卓/ios等）安装软件，然后注册账号，登录进去，如果是会员用户将开启更多功能，这个产品的ui需要内嵌一个“桂林古本伤寒杂病论.pdf”（你可以在工作区看到它），用户可以用光标选中原文，然后得出大模型的解释，同时仍然具备原项目的诊断功能，能靠模型或者规则来识别用户意图，最后用户本人能输入病案，然后作为数据存放在向量数据库中，用户可以选择是否公开病案，公开的病案可以被其他用户检索到，作为参考。用户还可以选择是否将自己的病案作为训练数据，参与模型的迭代优化。整个系统需要具备高并发处理能力，能够支持多用户同时在线操作，并且需要考虑分布式架构，以便在未来扩展时能够轻松应对更多的用户和数据量。检索时需要区分是原文的，还是用户的病案，检索结果需要标明来源。用户在使用过程中可以选择是否开启多agent协作模式，在这种模式下，系统会根据用户的需求，自动调用多个agent进行协作处理，以提高处理效率和准确性。整个系统的架构设计需要考虑到高并发、分布式和多agent协作的需求，以确保系统在面对大量用户和数据时仍然能够保持稳定和高效的运行。
+你帮忙验证一下可行性，并且预测是否具备多agent协作场景，是否能重构成高并发，分布式系统
+最后你可以更新一下SESSION_HANDOFF_PROMPT.txt

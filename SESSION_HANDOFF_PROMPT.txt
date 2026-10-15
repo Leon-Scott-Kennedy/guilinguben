@@ -1,0 +1,250 @@
+# 会话交接记录（2026-09-17 创建，2026-09-18 更新）
+
+## 本阶段完成的工作
+
+### A 轮：前端聊天式消息列表 UI（已完成）
+1. Java 新增 `GET /api/analysis/history` 会话历史接口：全量升序（与 Top5 上下文注入的降序查询语义分离）；citations 从 jsonb 字符串用 `TypeReference` 反序列化，失败兜底空列表。
+2. 前端 `page.tsx` 重构为聊天式界面：用户/AI 消息气泡、引用证据卡、自动滚动、loading 气泡；sessionId 改 localStorage 持久化（SSR 安全：useEffect 延迟初始化）。
+3. 待决策搁置项：新建会话按钮、历史加载静默降级策略（已记入需求书 ##11）。
+
+### B 轮 B1 接线（已完成）
+在 ai-service 内新建 `app/agent/` 包（state/llm/nodes/graph）实现 LangGraph 图，替换 main.py 两步函数调用，契约不变。
+
+### B 轮 B2 工具化（已完成，等用户确认后进 B3）
+1. 实测 Ollama + Qwen2.5:7b function calling 三场景：工具选择/参数生成正常、工具回填后能基于证据回答、常识问题倾向调工具。
+2. 新建 `app/agent/tools.py`：TOOL_DEFINITIONS（retrieve_guilinguben + lookup_formula）+ execute_tool_call 分发；方剂库读 data/桂林古本方剂提取结果.json（lru_cache）。
+3. 图升级：guardrail（硬边界）→ agent（LLM 决策）⇄ tools（执行回填），MAX_ITERATIONS=3 防死循环；state 增加 messages/tool_calls/iterations/guarded。
+4. llm.py 新增 build_system_prompt（工具使用策略 + 严格模式约束）与 chat_with_tools（/api/chat）。
+5. 关键调优：第一版 prompt 下症状问题不调工具且编造条文 → 收紧 prompt（必须调用工具场景 + 严禁编造）后，实测双工具组合调用成功。
+6. 三场景实测通过：症状问题自动 retrieve+lookup 双工具调用并基于证据回答；常识问题零工具直接回答；越界问题硬边界拦截。
+7. 验收修复（16.19）：历史上下文旧答案导致模型跳过工具并复述幻觉条文 → system prompt 双重强化 + 严格模式 user 消息级强制指令。
+8. 验收修复（16.20）：冷启动场景模型仍可不调工具直接回答并编造条文 → 严格模式首轮代码兜底（丢弃直接回答 + 强制注入检索）；实测 tool_choice="required" 在 Ollama 0.17.4 + qwen2.5:7b 下不稳定，不能依赖。
+9. 企业级工具调用保障五层方案对比（选型/引擎/架构模式/可靠性工程/降级兜底）已入卡点 16.21；当前方案定位：严格模式=Always-Retrieve 代码级实现，自由模式=LLM 自主。
+
+### B 轮 B3 Agent 循环强化（已完成，等用户确认后进 B4）
+1. 围栏升级为双层：关键词快路径（确定性零延迟）+ LLM 越界判定慢路径（few-shot prompt：YES/NO 单词输出 + 4 组示例，temperature=0）；判定失败 fail-open 放行。
+2. 截断收敛：新增 final_answer 节点——达到 MAX_ITERATIONS 时不直接 END，而是不带工具强制基于已有证据生成最终回答，消除空回答降级文案。
+3. 工具异常处理：单工具执行失败不中断循环，错误文本回填 + warning。
+4. 关键调试：围栏第一版 prompt 误拦“发热恶寒是什么证” → few-shot 修复后 13 围栏用例（含 3 轮重复）全过。
+5. 验收：截断收敛场景 3 轮工具后生成完整基于证据回答；5 场景端到端回归全过（关键词拦截、LLM 判定拦截、严格症状、自由常识、历史复述）。
+
+### B3 全链路实测（三端服务由 AI 启动并后台运行中）
+1. 三端日志埋点：Java [全链路] 请求/完成日志 + 耗时；前端 api.ts console.log；Python 入口参数/图耗时/响应摘要。
+2. 三端联调 6 场景全过：关键词越界（0.01s 快路径）、LLM 判定越界（13.6s）、严格模式症状（真实向量库 3 证据）、方剂（真实证据）、自由模式常识（动态 RAG 关闭）、历史窗口滚动（0→5 条）。
+3. 发现并修复（16.23）：方剂库繁体（“麻黃湯”）与模型简体输出（“麻黄汤”）不匹配 → lookup_formula 增加繁→简归一化映射表；修复后多轮指代追问（“它的药物组成是什么？”、“桂枝汤呢？”）均正确理解指代并基于证据回答。
+
+### B4 会话检查点（已完成）
+1. 存储介质选型（16.24）：MemorySaver（进程内存，重启丢失）/ SqliteSaver（本地文件，与 Java 业务库解耦）/ PostgresSaver（Python 直连 PostgreSQL，与“数据库操作留在 Java 端”约束冲突）三方案权衡 → 用户选 SqliteSaver（选项 A）。
+2. 实现：graph.py 挂 SqliteSaver（data/checkpoints.sqlite，sqlite3.connect check_same_thread=False，SqliteSaver 内部有 threading.Lock）；main.py invoke 带 config={"configurable": {"thread_id": session_id}}。方案甲：history_context 仍由 Java 注入，图内消息链不接管多轮，对外行为零变化。
+3. requirements.txt 按 torch_env 实装版本全量同步：新增 langgraph-checkpoint-sqlite==3.1.1、sentence-transformers==5.6.0、langchain-core==1.5.4；移除未使用的 langchain（代码无 from langchain import）；fastapi 0.141.1/uvicorn 0.51.0/pydantic 2.13.4/pydantic-settings 2.15.0/pypdf 6.16.0/requests 2.34.2/python-dotenv 1.2.2 八项对齐 torch_env（Python 3.12.13）。依赖安装到 torch_env（source C:/Users/LEONADA/anaconda3/Scripts/activate torch_env）。
+4. 验收：检查点机制单元验证 4 断言全过（同线程跨请求累加/多线程隔离/模拟重启后状态仍在/重启后延续）；真实服务 7 场景回归全过（关键词越界/LLM 判定越界/严格症状 3 citations/方剂/多轮指代/自由常识/严格常识兜底）；checkpoints 表按 thread 落盘验证通过（测试数据已清理）。
+5. B4 实测发现（16.25）：lookup_formula 按设计不产出结构化 citations（execute_tool_call 仅检索工具有证据列表），模型仅调方剂工具时 intent=no_match 且 citations=0，与回答正文引用条文不一致 → 已列查缺补漏（方剂工具结构化引用）。非 B4 回归：tools.py 未改动，为既有设计 + 7B 工具选择概率性叠加。
+6. 三端服务当前仅 Python(8001) 由 AI 后台运行中，Java/frontend 未启动（B4 只改 ai-service，未做三端联调）。
+
+### 岗位市场纠偏（2026-09-17，详见需求书 15.11 / 16.26-16.29）
+1. 已读 招聘信息/ 目录 14 张岗位图（深圳 BOSS 直聘 2026-09-12）并归纳技能频次：Python 13、Agent 13、RAG 12、大模型 API 12、LangChain 系 10、Tool Calling/MCP 7、Prompt 7、Redis 7、Java 7、FastAPI 7、向量库 6 等（详见需求书 15.11）。
+2. 纠偏结论：大方向一致无需改向；查缺补漏优先级重排为 Milvus 接线 → 评测集指标化 → 多轮记忆治理 → Redis 接线 → 审计日志与监控 → 方剂结构化引用；B5 增加断连/去重/恢复工程细节。
+3. 最匹配目标岗位：能信安“Agent开发工程师”（18-25K，5-10 年纯 Java 岗：SSE 流式工程细节、第三方接口重试幂等、JUnit5/Mockito、Agent 框架）。
+4. B5 计划已与用户确认（详见下方 B5 小节与需求书 16.30），等待用户开发指令。
+
+### B5 SSE 流式（已完成 2026-09-18，详见需求书 ##11 B5 条目 / 15.10 / 16.30）
+1. 实现：Python 新增 POST /api/agent/analyze/stream（Ollama stream:true 逐 token；llm.py chat_with_tools/chat_final_answer 加 on_token 回调；nodes.py ContextVar _stream_emitter 事件发射不入图状态；main.py per-request 有界队列 maxsize=1000 + 线程执行图 + StreamingResponse）；旧接口 /api/agent/analyze 零改动。
+2. Java 新增 POST /api/analysis/stream：pom 加 spring-boot-starter-webflux（仅客户端用，应用仍 servlet 栈）；AiServiceClient.analyzeStream 返回 Flux<ServerSentEvent<String>>；AnalysisStreamService（Layer 2 核心，每会话 ActiveStream：事件缓冲 CopyOnWriteArrayList 上限 2000 + eventCounter 自增 id + forwarders + finished + 上游 Disposable，TTL 5 分钟惰性清理）；controller SseEmitter(300s) + Last-Event-ID 重连分支（缓冲不可用发 error(recoverable=true) 引导历史恢复）+ done 回调落库 + 断连仅移除转发器不取消上游订阅；SecurityConfig 放行 /api/analysis/stream。
+3. 前端：api.ts analyzeQuestionStream（fetch POST + ReadableStream + TextDecoder('utf-8') + seenIds 去重 + Last-Event-ID header + StreamInterruptedError 携带断点 id）；page.tsx 打字机状态机（status/answer_delta/done/error 回调、tool_calling 清空已积累增量、断点重连一次后历史恢复兜底、闪烁光标/状态文本）。
+4. 事件协议：status（stage: guardrail_blocked/tool_calling/generating）/ answer_delta / done（完整 AnalyzeResponse）/ error + 每会话自增 event_id。
+5. 验收：三端联调 12/12 断言全过（事件序列与 id 自增、done 落库、断连后 Last-Event-ID 重放 id 连续含 done、断连后照常落库、旧接口回归）+ 浏览器实测打字机/状态文本/引用证据卡/越界快路径正常（截图 _b5_fe_shots/ 7 张）。
+6. 实测踩坑（16.30 已记录）：① Java SseEmitter 响应头默认无 charset，客户端按 ISO-8859-1 误读中文且 0x85 字节被 splitlines 误判换行 → controller 提前 response.setContentType("text/event-stream;charset=UTF-8")；② emitter.send(builder, mediaType) 重载绕过 SseEventBuilder 拆包且 StringHttpMessageConverter canWrite 失败静默丢事件 → send 只传 event() 构建器。
+7. 遗留：PostgreSQL b5-* 测试数据由用户于 2026-09-18 执行清理，AI 只读复查通过（b5 会话 0 条、b5 记录 0 条；现有 14 会话/36 记录为正式数据保留）；checkpoints.sqlite 的 b5-* 线程已由 AI 清理。
+8. 实测备注（非 B5 回归）：浏览器实测“桂枝汤的组成是什么？”intent=no_match 无引用（既有 RAG 检索行为，与 B4 已列“方剂工具结构化引用”查缺补漏同类，未处理）。
+
+### C 轮数据治理（已完成 2026-09-18，待用户验收，详见需求书 16.36）
+1. **C1 坐标实验**：PyMuPDF 确认页脚注释/页眉 y 坐标与正文分离度 → 页码双轨偏移 PDF_TO_BOOK_OFFSET=12（PDF 页码 = 书页 + 12，书页取自页眉 ·N· 标记）。
+2. **C2 pdf_loader 重构**：新增 `load_cleaned_pages()` 页级清洗视图（[(pdf_page, book_page, 清洗后文本)]）；全文流按 【X.Y】 编号切分（跨页条文用页偏移区间重叠法拼接，16.26 跨 PDF 169-170）；三层清洗（页眉书页号/页脚注释/夹注小字）。
+3. **C3 方剂库重建**：scripts/build_formula_db.py 页级提取 4 字段（ref/book_page/formula/composition/notes）→ 输出 446 条 data/桂林古本方剂提取结果.json（旧版备份 .v1.bak.json）；误报过滤用 after 内容判定（NARRATION_PAT `^(俱見|主之|,)`，前字符白名单因 NFKC 括号变体漏杀 4 个真条目被废弃）；附录二/三索引双向交叉校验差异 0（86 处页码差全部为附录多出的提及页）。
+4. **C4 tools.py 升级**：lookup_formula 4 字段输出（上限 10 条、精确匹配优先排序）+ 附录索引映射进内存（方剂→页码验证）；retrieve_guilinguben 用 article + 页码双轨 metadata（document_id 无页码 → C6 加 citation 页码字段）。
+5. **C5 索引重建**：torch_env 重建 data/faiss_index 964 条（4.14 MB，原 174 条）；检索抽查 metadata 双轨/跨页/清洗全对。
+6. **C6 三端回归 + 前端跳 PDF 实测（已完成）**：
+   - 四端 citation 页码链路：Python evidence 4 字段 → schemas.Citation → Java AnalyzeResponse.Citation record（@JsonProperty Integer）→ 前端 api.ts Citation + page.tsx 跳转优先 pdf_page_start（旧数据回退 document_id 正则）。
+   - 端到端（三端服务由 AI 启动）：症状问题 citations 5 条全带页码双轨；方剂问题 intent=formula_query + 10 条证据（桂枝湯精确优先），pdf=book+12 正确；16.26 跨页 metadata pdf 169-170/book 157-158 正确。
+   - 浏览器实测（_b5_fe_shots/ 截图 7 张）：方剂库卡片（书页 43）→ 模态框第 55 页 ✓；检索卡片（PDF第154页）→ 第 154 页 ✓；16.26 跨页卡片初始只渲染单页 → **修复 PdfViewer 支持 endPage 区间渲染（标题“第 169-170 页”），条文结尾“其針藥，各探其源。子當辨記，勿謂不然。”完整可见，复测通过**；单页格式无回归。
+   - 非 C 轮观察项（Browser 实测，未处理）：会话归属在浏览器代理反复切换侧栏会话时出现一次错乱（前端 sessionId localStorage + 侧栏切换逻辑，未复现稳定复现路径）；关闭模态框后短暂自动重开一次（未定位触发原因，不影响功能）。
+7. 探测脚本 _probe_c3b/c3c/c4/c5/c7/c8/c9/c10.py 已删除；_verify_c5.py 保留在项目根目录（含一次路径 bug 修复，可复用于索引重建后自检）。
+
+## 当前环境状态
+
+- 容器：guilinguben-postgres 运行中（**已 compose 接管：E 轮迁移完成 2026-09-20，密码已 ALTER 对齐 123，16.43**）；guilinguben-redis 运行中（docker compose up -d redis 用户启动）；**milvus/etcd/minio 已由用户停止（2026-09-19，16.38 验收用毕，数据卷保留）**；minio-setup 为一次性容器。
+- Python AI 服务（8001，torch_env）：**⑥版运行中（AI 后台 terminal 2，PID 15764，含 16.41 metrics 双层指标 + 16.39 guardrail 修复 + 16.40 可选 X-Api-Key 校验预留，默认关闭）**；VECTOR_BACKEND=chroma；三后端数据均已备好（FAISS/Chroma/Milvus 各 964 条，字段一致）。
+- Java 服务（8080）：**当前未运行**（E 轮验收③启动时密码认证失败退出；16.43 已修复：ALTER USER 密码 123 三方对齐 + JDBC URL 改 127.0.0.1，两条链路验证全过，待用户重启验证）；沙箱限制 AI 无法杀进程，重启由用户执行。
+- 前端 dev server（3000）：运行中（异常关机前启动，PID 22944），**含 16.40 登录页/登出/401 全局处理 + 未登录不拉历史修复**（HMR 已生效无需重启）。
+- Ollama（11434）：qwen2.5:7b，已就绪。
+- D 轮登录态（16.40）：登录 POST /api/auth/login {username,password} → token；演示账号 admin / admin123；业务接口必须带 Authorization: Bearer；users/roles/user_roles 三表已建（种子 admin→ADMIN，幂等跳过已存在用户）。
+- **已知遗留已修复（16.38，2026-09-19）**：milvus_store.py 已同步 C 轮 6 字段 schema（article/pdf_page_start/end/book_page_start/end）并重灌 964 条，三后端字段完全一致；8 查询 top-5 与 FAISS 40/40 重合 + 8/8 排序一致，三端回归全过。**无遗留。**
+- C 轮数据产物：data/faiss_index（964 条）/ data/桂林古本方剂提取结果.json（446 条 4 字段，旧版备份 .v1.bak.json）/ scripts/build_formula_db.py（方剂库重建脚本，可重跑）。
+- Redis 调试入口（用户执行）：docker exec -it guilinguben-redis redis-cli → KEYS guilinguben:* / GET guilinguben:history:{sessionId} / TTL 键名。
+- Milvus 容器栈已由用户停止（2026-09-19，数据卷保留）；如需切回 milvus 后端，恢复命令（用户执行，E 轮 16.42 后需带 profile）：docker compose --profile milvus up -d etcd minio && sleep 12 && docker compose --profile milvus up -d minio-setup && sleep 6 && docker compose --profile milvus up -d milvus，然后 services/ai-service/.env 改 VECTOR_BACKEND=milvus + 重启 Python。
+- 16.39 评测测试数据（eval-%）：**用户已于 2026-09-20 执行清零，AI 只读复查通过（eval 会话 0 条、记录 0 条；正式数据 18 会话/102 记录保留）**。
+- （用户已执行）：guardrail 修复冒烟测试数据待用户清理（guardrail-fix-% 2 会话 + 3 记录；SQL：DELETE FROM analysis_records WHERE session_id LIKE 'guardrail-fix-%'; DELETE FROM analysis_sessions WHERE session_id LIKE 'guardrail-fix-%';）。
+- （用户已执行）：C6 回归测试数据待用户清理（c6-e2e-% 2 会话 + 2 记录；SQL：DELETE FROM analysis_records WHERE session_id LIKE 'c6-e2e-%'; DELETE FROM analysis_sessions WHERE session_id LIKE 'c6-e2e-%';）。
+- （用户已执行）：Chroma 验收测试数据待用户清理（chroma-e2e-% 2 会话 + 2 记录；SQL：DELETE FROM analysis_records WHERE session_id LIKE 'chroma-e2e-%'; DELETE FROM analysis_sessions WHERE session_id LIKE 'chroma-e2e-%';）。
+- 切换后端方法（用户执行）：改 services/ai-service/.env 的 VECTOR_BACKEND（faiss/chroma/milvus）+ 重启 ai-service；三个后端数据均已备好（data/faiss_index、data/chroma_index、milvus 容器栈已停止——数据卷保留，切回时按上方恢复命令启动）。
+- （用户已执行）：D 轮修复验证新增测试数据待清理（d1-stream-retest / d1-stream-retest2 / d1-stream-fix 3 会话 + 3 记录；SQL：DELETE FROM analysis_records WHERE session_id LIKE 'd1-%'; DELETE FROM analysis_sessions WHERE session_id LIKE 'd1-%';）。
+- （用户保留）：⑥验收测试数据待清理（audit_logs 6 条验收审计；SQL：审计流水可选清理 TRUNCATE audit_logs; 或保留作演示数据）。
+
+## 下一步计划 / 待办（2026-09-19 更新）
+
+### 下阶段开发顺序（用户 2026-09-19 调整：前五项已完成、④已验收，D 轮优先、⑥顺延）
+执行顺序：**A 轮搁置项（✓）→ ⑤Redis 接线（✓）→ C 轮数据治理先行（✓）→ 切换 Chroma 向量库（✓）→ ④评测集指标化（✓）→ D 轮 JWT 鉴权 + RBAC + 登录功能（✓）→ ⑥审计日志与调用指标（✓）→ E 轮 Docker Compose 全栈一键启动（✓已实施待验收，方案丙，详见下方 E 轮小节）**。
+用户 2026-09-19 调整理由：D 轮生产化必经（16.3 预研：目前 /api/analysis/** 全放行）；⑥审计日志的记录用户名、鉴权埋点均依赖 D 轮（从 JWT 取真实用户），故 D 轮优先。
+工作流程约定不变：先写交接文件 → 用户回复“确认” → 开始编码 → 完成每项后再更新需求书卡点；每项完成停下等用户确认。
+
+1. ①方剂工具结构化引用：**已完成 2026-09-18（详见需求书 16.31）**。lookup_formula 返回与检索证据同构的结构化证据计入 citations（document_id 前缀 formula_db:，score=1.0）；纯方剂证据 intent=formula_query（新增契约值，三端透传无校验）；字段命名兼容 C 轮 4 字段。验收：单元 8 断言 + 非流式端到端 4 用例 + 流式 done 事件全过。
+2. ②多轮记忆治理：**已完成 2026-09-18，用户已确认验收（详见需求书 16.32）**。Python 摘要模块（滑动窗口：最近 1 轮原文 + 更早轮次 LLM 要点摘要；增量缓存同会话每请求至多 1 次摘要调用、命中零开销；≤1 轮零 LLM 开销；失败 fail-open 降级截断）；自由模式弱兜底（无证据 + 条文编号 → 追加“未经过文献检索验证”警示，严格模式不叠加）；Java 历史接口分页（limit/offset + total/hasMore，limit clamp 1~200）；前端分页加载 + “加载更早消息”按钮。验收：单元 7 组 + 端到端 4 轮（指代解析成功、[Memory] 摘要 49 字/增量 34 字）+ 弱兜底 3 断言 + 分页 5 断言全过 + tsc 编译通过。浏览器实测补充（已修并记入 16.32）：prepend 触发自动滚动跳底 → 滚动锚定修复；formula_db 证据卡片“匹配度 100%”误导 + 点击静默无效 → 改“方剂库精确匹配”标签 + “暂不支持跳转 PDF（C 轮含页码后支持）”提示。踩坑：测试脚本 snake_case 字段与 camelCase record 不匹配 → session_id 非空约束 500（见 16.32）。
+3. ③Milvus 接线：**已完成 2026-09-18，用户已确认验收（详见需求书 16.33）**。实现：MilvusVectorStore 适配器复用 ports.py 协议（schema：content/source/page/chunk + 1024 维向量，IVF_FLAT+COSINE，返回 1-cosine 伪 L2 距离与 FAISS 分数语义对齐，tools 层零改动）；config vector_backend 开关（faiss 默认/milvus，配置在 services/ai-service/.env——根目录 .env 不生效）；scripts/build_milvus_index.py 灌数（174 片段）；compose 修正（standalone 位置参数、quay.io 镜像、mc 建桶、etcd advertise）。验收：8 查询 top-5 完全重合 8/8（FAISS 约 201ms vs Milvus 约 181ms）+ 三端回归全过 + 七种向量库对比已入 16.33。**验收后因内存紧张切回 FAISS**（用户指示）：.env 改 faiss + 重启 Python（日志确认加载 data/faiss_index），milvus/etcd/minio 容器已停止（数据卷保留）；Chroma 替换成本已向用户分析（未实施）。
+4. **A 轮待决策搁置项（下阶段第 1 项）**：**已完成 2026-09-18（详见需求书 16.34）**。用户拍板 DeepSeek 风格：左侧历史会话列表侧栏 + 左上角新建会话按钮。实现：Java 新增 GET /api/analysis/sessions（一条原生 SQL 聚合出 sessionId/首问标题/轮数/最后更新时间，含空会话，按活跃倒序）+ SessionSummary DTO + SecurityConfig 放行；前端深色侧栏（新建按钮 + 列表：title 截断 + 相对时间 + 轮数，当前高亮，<md 隐藏）+ 新建/切换会话（复用 sessionId→历史加载 effect，loading 禁止防串会话）+ 落库后 refreshSessions 自动置顶；历史加载静默降级策略确认：列表/历史失败均静默不阻塞提问。验收：tsc + mvn compile 过 + 端到端 4 断言（新会话流式 formula_query+5 citations → 列表顶部 title=首问 → 新会话历史加载 → 旧会话回归）全过。踩坑：SecurityConfig 未放行新路径 401；Hibernate 6 原生查询 timestamptz 返回 Instant 非 Timestamp。**待用户浏览器实测确认后进⑤Redis**。
+5. **⑤Redis 接线（下阶段第 2 项）**：**已完成 2026-09-18，待用户确认验收（详见需求书 16.35）**。Java 端会话历史上下文缓存（HistoryCacheService：key=guilinguben:history:{sessionId}，TTL 30 分钟，**写更新 append + 5 轮裁剪**——修复了 evict 写失效时序缺陷：put 后落库 evict 删掉自己的缓存导致永远 miss）＋接口限流（RateLimitInterceptor 固定窗口：key=guilinguben:ratelimit:{ip}:{窗口}，INCR+EXPIRE，30 次/分钟/IP，超限 429+Retry-After，WebConfig 只拦 /api/analysis 与 /api/analysis/stream）＋四层 fail-open（lettuce 惰性连接启动不报错 + 限流放行/读退回查库/写跳过/删依赖 TTL 四处 try/catch + timeout 2s）。验收：Redis 停时 fail-open 4 条降级日志实锤 + 全链路正常；3 连问缓存命中（问 2 命中 103 字节/问 3 命中 259 字节，多轮指代正确）；限流 31 请求第 31 个 429；三端回归（非流式+流式+sessions/history）全过。**待用户确认验收后进 C 轮数据治理先行**。
+6. **C 轮数据治理先行（下阶段第 3 项）**：**已完成 2026-09-18，待用户验收（详见需求书 16.36 与本文件 C 轮小节）**。检索索引 964 条（按条文编号切分，一条文一条数据）+ 方剂库 446 条 4 字段 + 页码双轨四端贯通 + PdfViewer 跨页区间渲染修复；验收：端到端 2 用例（症状/方剂）+ 浏览器实测 3 场景（方剂库跳转 43→55、检索卡片 154、跨页 169-170）全过。**待用户确认验收后进切换 Chroma 向量库。**
+7. **切换 Chroma 向量库（下阶段第 4 项）**：**已完成 2026-09-19，待用户验收（详见需求书 16.37 与本文件 Chroma 小节）**。ChromaVectorStore 适配器（chromadb 1.5.9 原生 SDK、PersistentClient 本地持久化 data/chroma_index、cosine space、embedding_function=None 规避 onnx 下载）+ main/config 零协议改动 + build_chroma_index.py 灌数 964 条；验收：8 查询 top-5 与 FAISS 40/40 重合 + 排序 8/8 一致 + 三端回归（症状/方剂页码双轨完整）+ FAISS 切回验证通过；**当前 .env 已切 VECTOR_BACKEND=chroma（8001 运行中）**。**待用户确认验收后进④评测集指标化。**
+8. **④评测集指标化（下阶段第 5 项）**：**已完成 2026-09-19，用户已确认验收（详见需求书 16.39 与本文件④评测小节）**。自建评测集 20 条（症状/方剂/常识/越界/重复提问各 4 条）+ scripts/eval_rag.py（规则+本地 Ollama judge）；基线：工具调用精度 20/20（100%）、幻觉率 0/12（0%）、任务成功率 20/20（100%）；评测驱动修复 guardrail 两处误拦（中医常识/多轮追问）并记录三项已知限制。
+9. **D 轮 JWT 鉴权 + RBAC + 登录功能（用户 2026-09-19 调整为下一项）**：**已实施完毕 2026-09-19，浏览器实测已过（详见需求书 16.40 与本文件 D 轮小节）**。**待用户确认验收后进⑥审计日志与调用指标。**
+10. **⑥审计日志与调用指标（顺延至 D 轮之后）**：**已实施完毕 2026-09-19，接口级验收全过（详见需求书 16.41 与本文件⑥小节）**。**已验收 → 当前规划项全部闭环。**
+11. **E 轮 Docker Compose 全栈一键启动（收尾项）**：postgres compose 管理化迁移（用户执行）+ 三端一键启动编排 + 本地部署文档。**方案丙已拍板并实施完毕 2026-09-20（静态验证全过），待用户执行验收（第 1 部分 postgres 迁移 + 第 2 部分启动演练）。**
+
+### C 轮数据治理计划（用户 2026-09-18 提出，下阶段第 3 项执行）
+1. retrieve_guilinguben 数据源重构：现 PDF 切块方式不满意，改为**按编号切分，一个编号算一条数据**（如 [1.1]、[4.9]、[4.16] 各自成条）。参考截图目录：retrieve_guilinguben工具的相关截图/（3 张）。
+2. lookup_formula 数据源重构：现"桂林古本方剂提取结果.json"为 3 字段（ref/symptom/formula，手动整理），改为 **4 字段：方剂所在页码、方剂名、方剂的药物组成、注意事项**。参考截图目录：lookup_formula工具的相关截图/（2 张，红框=方剂名/药物组成/注意事项，绿框=页码）。
+3. 重构后需重新切分清洗、重建向量索引、三端回归；与①方剂结构化引用存在衔接（见上方①备注）。
+
+### Chroma 编码方案（2026-09-19 拟定）→ 已实施完毕（详见需求书 16.37，以下为实施记录）
+**目标**：C 轮重构后顺势切换 Chroma（避免重复灌数），实现 ChromaVectorStore 协议适配器，tools/Agent/API/Java/前端零改动。
+
+**现状调研结论**：
+- torch_env 已装 chromadb 1.5.9（无需安装）；ports.py 协议与 Milvus 适配器模式可直接复用；loader 的 metadata 6 字段（source/article/pdf_page_start/end/book_page_start/end）全为 str/int 标量，Chroma metadata 兼容无清洗成本。
+- score 契约：tools.py `normalize_score=1/(1+距离)`，要求适配器返回“距离”（越小越好）。Chroma 建 collection 时设 `hnsw:space=cosine`，query 返回的 distance = 1-cos，与 Milvus 适配器（1-cosine 伪距离）语义完全对齐；Milvus 验收时 8 查询 top-5 与 FAISS(L2) 完全重合已证明 bge 向量归一化，故 cosine 排序与 FAISS 等价。
+
+**编码清单（5 处）**：
+1. **新建 `app/retrieval/chroma_store.py`**：ChromaVectorStore(VectorStore)，chromadb 原生 SDK（与 Milvus 适配器同风格，不引 langchain 封装）：
+   - `__init__(embeddings, persist_dir, collection_name="guilinguben_chunks")`；PersistentClient 懒加载（`_require_collection` 模式同 milvus_store）。
+   - `build_index`：client 存在同名 collection 则 delete 重建（与 Faiss/Milvus 语义一致）→ `get_or_create_collection(name, metadata={"hnsw:space": "cosine"})` → 分批（256）add（ids=`doc{idx}`、documents、embeddings=embed_documents、metadatas=6 字段）。
+   - `similarity_search_with_score`：embed_query → query(query_embeddings, n_results=k, include=["documents","metadatas","distances"]) → SearchResult(document, score=float(distance))；distance 即 cosine 距离（越小越好），normalize_score 无需改。
+   - collection 不存在时 RuntimeError 提示跑灌数脚本或切回 faiss（同 milvus_store 文案风格）。
+2. **修改 `app/config.py`**：vector_backend 注释加 chroma；新增 `chroma_persist_dir = str(BASE_DIR / "data" / "chroma_index")`、`chroma_collection_name = "guilinguben_chunks"`。
+3. **修改 `app/main.py`**：initialize() 加 chroma 分支（存在 → 惰性加载；不存在 → 从 PDF 构建，模式同 milvus 分支）。
+4. **新建 `scripts/build_chroma_index.py`**（仿 build_milvus_index.py）：复用 loader.load()（964 条）+ 灌数 + 抽查检索验证（含 metadata 双轨打印）。
+5. **修改 `services/ai-service/requirements.txt`**：追加 chromadb==1.5.9。
+
+**不改动**：tools.py / schemas / agent 图 / Java / 前端（协议零改动）；milvus_store.py 不修（milvus 已停用，其 C 轮字段滞后为已知遗留，不在本项范围）。
+
+**验收（同 Milvus 标准）**：
+- 8 查询 top-5 与 FAISS 对比（期望高度重合/等价排序，分数语义单调一致）；
+- 三端回归：症状/方剂端到端（页码双轨字段完整性）+ 前端跳 PDF；
+- 切换方式：services/ai-service/.env `VECTOR_BACKEND=chroma` + 重启 ai-service 生效；FAISS 保留随时切回（双向切换机制与 milvus 相同）。
+
+### milvus 恢复改造方案（2026-09-19 拟定，用户确认后实施）→ 已实施完毕（详见需求书 16.38，以下为实施记录）
+**目标**：同步 milvus_store.py 到 C 轮 6 字段 schema 并重灌数，使 milvus 后端恢复可用；验收后日常后端保持 chroma（沿用内存紧张决策），milvus 容器栈由用户停止。
+
+**代码改造（2 文件）**：
+1. `app/retrieval/milvus_store.py` 三处：
+   - build_index schema：旧 page/chunk 两 INT64 字段 → article(VARCHAR max_length=64) + pdf_page_start/end + book_page_start/end 四个 INT64（与 Chroma 适配器字段完全一致）；
+   - rows 构建：对应改 `doc.metadata.get("article", "")` 与四个页码 int 转换；
+   - search output_fields 与返回 metadata：同步为 6 字段（source/article/页码双轨），score 契约（1-cosine 伪距离）不变。
+2. `scripts/build_milvus_index.py`：抽查打印从 `p{page} c{chunk}` 改为条文/页码双轨。
+
+**执行顺序（需用户配合 1 步）**：
+1. 【用户执行】启动 milvus 容器栈：`docker compose up -d etcd minio && sleep 12 && docker compose up -d minio-setup && sleep 6 && docker compose up -d milvus`（容器生命周期由用户执行，约定不变）。
+2. 【AI】torch_env 运行 `python scripts/build_milvus_index.py` 重灌 964 条（脚本自动 drop 重建）。
+3. 【AI】8 查询 top-5 与 FAISS 对比（期望 40/40 + 排序一致）。
+4. 【AI】三端回归：.env 切 milvus → 启动 ai-service → 症状/方剂端到端（页码双轨字段完整）。
+5. 【AI】验收后 .env 切回 chroma 并重启 ai-service（日常状态）；【用户执行】停止 milvus 容器栈（docker stop guilinguben-milvus guilinguben-etcd guilinguben-minio）。
+6. 【AI】尾巴收尾：删除内部记忆中“milvus 未同步 C 轮字段”缺陷条目（坑已填，不再需要）；交接文件“已知遗留”改为“已修复（16.38）”；需求书新增 16.38 卡点。
+
+### ④评测集指标化编码方案（2026-09-19 拟定）→ 已实施完毕（详见需求书 16.39，以下为实施记录）
+**交付**：.deepeval/eval_cases.json（20 条）/ scripts/eval_rag.py / .deepeval/reports/eval-20260919-105957.{json,md}（最终基线）。
+**基线（2026-09-19）**：工具调用精度 20/20（100%）、幻觉率 0/12（0%）、任务成功率 20/20（100%）；方案 A（自研脚本+本地 Ollama judge）按用户确认实施。
+**评测发现并修复的链路缺陷（3 项）**：guardrail 误拦中医常识 → prompt 加 YES 示例；guardrail 误拦多轮追问 → chat_guardrail 加 history_hint（nodes.py 传历史上下文）；评测口径与严格模式强制检索对齐（expected_intent 允许集、repeat 方剂名答案命中）。**注意：llm.py/nodes.py 已改，需重启 ai-service 生效——当前 8001 为修复版运行中。**
+**已知限制**：本地 7B judge 稳定性有限（prompt 加宽松判定约束）；多轮复述历史条文编号按幻觉口径从严计 1 条（证据追溯，后续改进）。“中药和西药的区别”类跨域比较题 guardrail 拦截有合理性（已换“六经辨证”题）。
+
+### D 轮 JWT 鉴权 + RBAC + 登录功能编码方案（2026-09-19 拟定）→ 已实施完毕（详见需求书 16.40，以下为实施记录）
+**交付**：users/roles/user_roles 三表 + DataInitializer 幂等种子（admin/admin123/ADMIN）；JwtUtil（jjwt 0.12.3 HS256，签发参数化 TTL）；JwtAuthenticationFilter（ROLE_ 前缀入 SecurityContext）；SecurityConfig 重写（STATELESS + OPTIONS 精确放行 + 登录/健康检查 permitAll + 其余 authenticated + 401/403 JSON + @EnableMethodSecurity）；AuthController 查库 BCrypt；LoginResponse；SecurityUtil；前端 api.ts 统一 Bearer + 401 全局回调 + page.tsx 登录卡片/登出/刷新恢复；@CrossOrigin 补 allowedHeaders。
+**三取舍落地（用户要求搭架子）**：①RBAC 数据模型：三表 + @ManyToMany + JWT roles claim + @PreAuthorize 可用（多角色只需插数据）；②数据隔离：sessions/records 加 owner_username（可空），写路径（建会话/成功/失败落库）已落当前用户，仓库预留 findByOwnerUsername，读路径暂不过滤；③refresh token：JwtUtil TTL 参数化 + yml 预留 refresh-expiration-days + LoginResponse 注释预留；限流 buildIpKey/buildUserKey 双 key 设计（仍 IP 维度）；Python ai_service_api_key 预留（空=关闭，main.py 全局 verify_api_key 依赖）+ Java AiServiceClient api-key 头注入预留。
+**验收（接口级全过 + 浏览器实测全过）**：无 token/伪造 token → 401 JSON；错误密码 401；正确登录 → token(roles claim)；带 token sessions 200；OPTIONS 预检 200 + Allow-Headers 完整；带 token 非流式问答（桂枝汤）200 + 流式 SSE 正常；psql 复查 admin→ADMIN 关联与 owner_username=admin 落库。**浏览器自动化复测 5 步全过（登录卡片 → 登录 → 流式问答 49s/157 事件 → 刷新保持 → 登出）**。
+**踩坑（16.40 已记录，首轮浏览器实测暴露并已修复）**：①401/403 JSON 体 Map.of("data",null) 抛 NPE → 匿名访问 500；②**AuthorizationFilter 参与 ASYNC dispatch**（SseEmitter 完成时异步重入过滤器链，JwtAuthenticationFilter 跳过 → SecurityContext 空 → 拒绝 → 响应已提交后异常 → SSE 连接非正常关闭，浏览器 ERR_INCOMPLETE_CHUNKED_ENCODING/curl exitcode 18；修复 dispatcherTypeMatchers(ASYNC).permitAll()）；③异步线程 SecurityContext 丢失 → 流式落库 owner 为 null（修复：同步捕获 username 传入回调，落库方法加指定属主重载）；④前端未登录仍拉历史（effect 加 auth 依赖）。**教训：SSE 接入 Spring Security 后必须验证连接正常关闭（curl exitcode 0），不能只看内容。**
+**待办（用户执行）**：验收测试数据 d1-* 清理与旧测试数据清理未决项（mem-e2e/a1-e2e/redis-%/rl-test）**均已于 2026-09-19 由用户执行完毕**。
+
+### ⑥审计日志与调用指标编码方案（2026-09-19 拟定入档）→ 已实施完毕（详见需求书 16.41，以下为实施记录）
+**交付（双端 9 处）**：Java 审计四件套（AuditLog 实体 IDENTITY 主键 + AuditLogRepository + AuditService.record 8 参统一入口（截断 200/500 + 吞异常不影响业务）+ AuditPageResponse + AuditController GET /api/audit（limit/offset/action，@PreAuthorize ADMIN——D 轮 RBAC 架子首次实际使用））；埋点 5 类（LOGIN_SUCCESS/LOGIN_FAIL/ANALYZE/ANALYZE_STREAM/EXPLAIN，读接口不记、不引入 AOP）；流式埋点（startStream 加第五参 errorHandler + done 回调包装 onStreamDone 落库审计一体 + username/ip 同步捕获传异步闭包）；Python app/metrics.py（锁保护进程内聚合：接口层 total/success/fail/总耗时/最长耗时，LLM 层 total/fail/总耗时 + 最近 20 次明细）+ GET /metrics 快照；llm.py 埋点 5 处（chat_with_tools/chat_guardrail/chat_final_answer/summarize_history/local_llm_response——比方案多一处覆盖 explain 底层调用）。
+**验收（2026-09-19 接口级全过）**：无 token /api/audit → 401 JSON；admin token → 200；登录失败/成功 → 2 条审计（89ms/194ms）；非流式问答 ANALYZE SUCCESS 43925ms（intent=formula_query）；explain 20700ms；流式 ANALYZE_STREAM SUCCESS 24522ms（curl EXIT 0）；越界问题 ANALYZE SUCCESS（intent=out_of_scope）；psql 复查 6 条记录字段完整；Python /metrics 计数与明细正确（guardrail 3 次、chat_with_tools 4 次、recent 逐条）。
+**踩坑（16.41 已记录）**：metrics.py 函数名与 main.py 导入名不一致 → uvicorn 启动 ImportError 退出（py_compile 只查语法不查 import 未暴露）；修复统一命名。教训：跨模块新增导入必须真实 import 一次验证（from app.main import app 级别）。
+**默认取舍落地**：指标不持久化（重启清零）；前端不加展示页面；审计不自动清理；username 从 JWT 取。
+**待办（用户执行）**：验收测试数据 a6-e2e-% 清理 + audit_logs 可选清理（SQL 见环境状态）。
+
+### E 轮 Docker Compose 全栈一键启动编码方案（2026-09-19 拟定；用户 2026-09-20 拍板方案丙 → 已实施完毕，待用户验收）
+**目标**：需求书 15.8 阶段八收尾——postgres 容器 compose 管理化迁移 + 三端一键启动编排 + 本地部署文档。
+
+**现状调研结论**：
+- docker-compose.yml 已定义 7 服务（postgres/redis/rabbitmq/etcd/minio/minio-setup/milvus）；redis 已接线（⑤轮），rabbitmq 未接线（阶段五待办），etcd/minio/milvus 仅 milvus 备用后端使用（已停用，日常 chroma）。
+- **关键问题**：运行中的 guilinguben-postgres 是早期 docker run 创建，挂匿名卷；compose 定义 named volume postgres_data。两者不一致——直接 compose up postgres 会另起容器丢数据，必须先迁移。
+- 三端日常为开发模式（Java mvn / Python torch_env uvicorn / 前端 npm dev），Ollama 为 Windows 原生进程（11434）。
+
+**第 1 部分：postgres compose 管理化迁移（前置，用户执行，AI 只读复核）**
+1. 【AI】迁移前 psql 记数基线：analysis_sessions / analysis_records / audit_logs 三表行数。
+2. 【用户】备份：docker exec guilinguben-postgres pg_dump -U guilinguben guilinguben > pg_backup.sql（git bash 下执行，落项目根目录）。
+3. 【用户】docker rm -f guilinguben-postgres（匿名卷仍保留，作兜底）。
+4. 【用户】docker compose up -d postgres（新容器挂 named volume postgres_data，空库）。
+5. 【用户】恢复：docker exec -i guilinguben-postgres psql -U guilinguben guilinguben < pg_backup.sql。
+6. 【AI】只读复查：三表行数与基线一致 + 抽样会话/记录内容一致 → 迁移完成；pg_backup.sql 保留作兜底，验收后由用户决定是否删除。
+
+**第 2 部分：三端编排取舍（用户 2026-09-20 拍板：方案丙）**
+- 方案甲 三端全容器化：Java/Next.js/Python 三个 Dockerfile + compose 三服务，真·一键、环境可复制。缺：torch 镜像数 GB、构建慢、开发迭代需重建镜像、Ollama 需宿主网络、内存压力大（有 milvus 停用前科）。
+- 方案乙 启动脚本：compose 只管中间件，新增 scripts/start-all.sh / stop-all.sh 一键拉起/停止三端（后台 + 日志 + PID）。优：保持开发迭代速度、启动快、内存可控；缺：依赖宿主机 JDK/Node/torch_env。
+- **方案丙（用户选定）混合**：乙为主体 + 三端 Dockerfile 作为可选资产（面试展示用，默认注释不启用）。
+
+**第 3 部分：编码清单（按方案丙）→ 已实施完毕 2026-09-20（静态验证全过）**
+1. **docker-compose.yml 调整（已实施）**：postgres healthcheck（pg_isready，start_period 10s）+ redis healthcheck（redis-cli ping）；rabbitmq profiles ["mq"]；milvus 栈 4 服务 profiles ["milvus"]；末尾三端容器化注释块（SPRING_DATASOURCE_URL / SPRING_DATA_REDIS_HOST / AI_SERVICE_BASEURL → host.docker.internal + extra_hosts host-gateway + ai-service 根路径挂载与 LLM_BASE_URL / CHROMA_PERSIST_DIR ENV + depends_on postgres service_healthy）；顺手移除过时 version 字段。
+2. **scripts/start-all.sh（已新建）**：只读前置检查（docker ps 探测中间件容器——未就绪仅提示并退出，不自行拉起；Ollama /api/tags）→ 顺序后台启动三端（mvn spring-boot:run → activate torch_env + uvicorn（先 cd services/ai-service：pydantic-settings 按工作目录读 .env）→ npm run dev，日志 + PID 落 logs/）→ wait_http 就绪等待 + already_up 幂等跳过 → 三端健康汇总。
+3. **scripts/stop-all.sh（已新建）**：读 logs/*.pid → taskkill //F //T 树杀（连带 mvn/npm 包装进程的 java/node 子进程）→ kill -9 兜底（MSYS 伪 PID 场景）→ 端口 8080/8001/3000 残留扫描兜底；只停应用不动容器。
+4. **三端 Dockerfile + .dockerignore（已新建，可选资产）**：java-backend maven 多阶段（pom 先行依赖层缓存）→ temurin JRE；ai-service（构建上下文为项目根；容器内 BASE_DIR=parents[3]=/，挂载 ./models:/models ./data:/data ./guilinguben.pdf:/guilinguben.pdf；ENV 覆盖本机 .env 的 Windows 绝对路径：LLM_BASE_URL / VECTOR_BACKEND=chroma / CHROMA_PERSIST_DIR / EMBEDDING_MODEL_PATH / SOURCE_PDF_PATH）；frontend node 三阶段 + next start。
+5. **docs/DEPLOY.md（已新建）**：架构总览 / 环境要求 / 首次初始化 / 日常操作 / 验证清单 / profiles 扩展 / 三端容器化说明 / FAQ。
+
+**不改动**：三端业务代码零改动；Ollama 不进 compose（Windows 原生，脚本检测 11434）。
+
+**静态验证（2026-09-20 全过）**：bash -n 两脚本语法通过；docker compose config 渲染通过（默认服务仅 postgres+redis；--profile mq 增 rabbitmq；--profile milvus 增 4 服务）。
+
+**验收标准（待用户执行，2026-09-20）**：
+1. 【用户】postgres 迁移（第 1 部分 6 步）后三表行数与基线一致；
+2. 【用户】docker compose up -d 一键拉起 postgres+redis（milvus 栈与 rabbitmq 默认不拉起）；
+3. 【用户】scripts/start-all.sh 一键三端就绪 → 登录 + 一次流式问答冒烟 + /metrics 计数增加；
+4. 【用户】scripts/stop-all.sh 停三端、容器仍在运行；
+5. 【用户】按 docs/DEPLOY.md 步骤独立走一遍可复现。
+
+**E 轮验收卡点（16.43，2026-09-20；修复已完成，待用户重启 Java 验证）**：验收③ Java 启动报密码认证失败（HikariCP FATAL）。排查三层：配置字面一致（均 123）→ 容器内 localhost 测试是 pg_hba trust 假象（错误密码也通过）→ 容器 IP scram 真认证失败 → 根因：命名卷 guilinguben_postgres_data 旧初始化密码 ≠ 123（POSTGRES_PASSWORD 仅空卷首次 initdb 生效，对已有卷静默忽略）。修复：用户已执行 ALTER USER guilinguben WITH PASSWORD '123'（三方对齐；容器 IP scram + 宿主机映射两条链路验证全过）；application.yml JDBC URL 已改 127.0.0.1（防 JVM 优先 ::1 撞 wslrelay 监听，建议保留）。剩余：用户重启 Java 验证启动无 FATAL。
+
+**E 轮验收卡点 2（16.44，2026-09-20；已修复，验收③已通过）**：start-all.sh 启动 ai-service 失败——日志重定向后 Python stdout 改用 GBK 编码，业务 print 的 ✓（U+2713）抛 UnicodeEncodeError 启动退出（日志中文乱码同源）。修复：脚本 ai-service 启动命令前置 PYTHONIOENCODING=utf-8（业务代码零改动，覆盖 main.py 全部 print 含 3 处 ✓）；用户重跑 start-all.sh 后验收③通过（三端日志正常、中文无乱码、流式问答与 /metrics 正常）。
+
+**E 轮验收卡点 3（16.45，2026-09-20；已修复，验收④已通过）**：验收④ stop-all.sh 提示“三端已停止”但 8080（java 20172）/3000（node 22496）仍监听——双缺陷：①无 PID 文件直接跳过（前端 already_up 幂等跳过未写 frontend.pid）；②kill -9 伪 PID 只杀 mvn/npm 包装进程、java/node 孤儿继续监听且误报成功。修复：stop_endpoint 重构——PID 文件优先尝试 + 无条件按端口扫描残留树杀，以“端口释放”为最终判据。用户重跑后复查通过：三端口全释放、java/node 进程清零、容器 postgres/redis 仍在（healthy）。
+
+**E 轮验收卡点 4（16.46，2026-09-20；已修复，已验证通过）**：logs/java.log 中文乱码——java-backend 无 logback 配置，默认 ConsoleAppender 用平台默认编码（GBK）写文件、按 UTF-8 读取即乱码（16.44 的 Java 变体）。修复：start-all.sh 的 mvn 命令追加 -Dspring-boot.run.jvmArguments=-Dfile.encoding=UTF-8；用户重跑后确认 java.log 中文无乱码。
+
+### 阶段五规划中待办（2026-09-19 入档，未开工）
+以下 4 项来自需求书阶段五（消息中间件与长任务 + 资产管理 + 监控 + CI/CD），仅规划未开工：
+1. **RabbitMQ 文献处理与长任务队列**：compose 已备 rabbitmq 服务（E 轮加 profiles 后默认不启用）。规划：文献导入/索引重建等耗时任务异步化——Java 暴露文献导入接口（受理即返回 202 + taskId + 任务状态查询接口），生产者投递 RabbitMQ 队列，Python 侧消费者 worker 复用现有 loader/build 脚本执行并回写状态，前端任务进度展示（复用 B5 SSE 经验）。触发场景：用户上传新文献 PDF → 清洗切分 → 重建/增量灌入向量库。
+2. **MinIO 文献资产管理**：compose 已备 minio（当前仅 milvus 依赖）。规划：文献原始文件（PDF/图片）对象存储，Java MinIO SDK 上传/下载 + 预签名 URL 供前端直接访问；与第 1 项文献导入队列联动（上传 → 异步处理 → 索引生效）。
+3. **监控告警**：Java Spring Boot Actuator（/actuator/health/metrics）+ Prometheus + Grafana 面板（QPS/RT/限流 429 计数/流式连接数）；Python 侧 /metrics 已有雏形（⑥轮），可补 Prometheus 文本格式导出统一采集；告警规则（服务宕机/LLM 失败率阈值/限流触发频率）。
+4. **CI/CD**：Git 仓库初始化 + GitHub Actions 流水线（Java mvn test、Python pytest、前端 tsc+eslint → 构建产物），面试加分项。
+
+### 远期功能待办（2026-09-19 入档，非当前阶段范围）
+以下 2 项来自需求书 5.3 / 5.4，属于产品远期规划：
+1. **病案录入与 RLHF 闭环（需求书 5.3）**：中医病案录入管理（病例表 + 录入 UI + 匿名化处理）与病例检索增强；用户反馈闭环（问答点赞/点踩 + 原因）→ 反馈数据汇入评测集 → 持续评测驱动优化（RLHF 数据循环）。现状：仅有审计日志（⑥轮）与自建评测集 20 条（④轮），无真实用户反馈通道。
+2. **会员角色与权限管理（需求书 5.4）**：用户注册/资料管理/密码修改、角色管理后台（ADMIN 界面）、会员等级与用量额度。现状：D 轮已搭 RBAC 架子（users/roles/user_roles 三表 + JWT + @PreAuthorize），读路径 owner 过滤预留（仓库 findByOwnerUsername 未启用），扩展点齐备，仅缺管理面功能。
+
+### 其他待办
+- B5 遗留 PostgreSQL b5-* 测试数据：**用户已于 2026-09-18 执行清理，AI 只读复查通过（b5 会话 0 条、b5 记录 0 条；现有 14 会话/36 记录为正式数据保留）。**
+- ①验收测试产生 PostgreSQL 测试数据（formula-%/probe-% 共 9 会话 + 9 记录）：**用户已执行清理，AI 只读复查通过（0 条）**。
+- ②/A 轮/⑤Redis 验收测试数据（mem-e2e-%/a1-e2e-%/redis-%/rl-test）：**用户已于 2026-09-19 执行完毕，无需保留记录**。
+- postgres 容器 compose 管理化迁移：**纳入 E 轮方案（见上方 E 轮小节）**。
+
+## 重要约定
+
+- 数据库及容器启停、重建、删除等生命周期操作由用户执行；AI 只做只读查询和提出方案。
+- 编码遵循最小范围改动原则；注释与实现必须一致。
+- 每个大阶段/小步骤完成后停下来等用户确认，再进入下一步。
+- 查缺补漏阶段工作流程（用户 2026-09-18 指定）：先写交接文件 → 用户回复"确认" → 开始编码 → 完成每项后再更新需求书卡点。
